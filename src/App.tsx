@@ -1,18 +1,32 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GameCanvas } from './components/GameCanvas';
-import { RotateCcw, Share2, ChevronRight, Clock, Hash, Map as MapIcon } from 'lucide-react';
+import { LandingPage } from './components/LandingPage';
+import { TelemetryDashboard } from './components/TelemetryDashboard';
+import { PlantGrowth } from './components/PlantGrowth';
+import { RotateCcw, Share2, ChevronRight, Clock, Hash, Map as MapIcon, ChevronDown, ChevronUp } from 'lucide-react';
 
 export default function App() {
+  const [currentPage, setCurrentPage] = useState(0);
   const [levelIdx, setLevelIdx] = useState(0);
   const [moveCount, setMoveCount] = useState(0);
   const [isCleared, setIsCleared] = useState(false);
-  const [stats, setStats] = useState<{ time: number; moves: number; visited: Set<string> } | null>(null);
+  const [stats, setStats] = useState<{ 
+    time: number; 
+    moves: number; 
+    visited: Set<string>;
+    telemetry: {
+      firstTouchDelay: number;
+      backtracks: number;
+      pathEfficiency: number;
+      hintUsed: boolean;
+    }
+  } | null>(null);
   const [showToast, setShowToast] = useState(false);
 
   const handleMove = (count: number) => setMoveCount(count);
 
-  const handleClear = (s: { time: number; moves: number; visited: Set<string> }) => {
+  const handleClear = (s: any) => {
     setStats(s);
     setIsCleared(true);
   };
@@ -21,14 +35,21 @@ export default function App() {
     setIsCleared(false);
     setStats(null);
     setMoveCount(0);
-    setLevelIdx(prev => prev); // Trigger re-init in GameCanvas
+    setLevelIdx(prev => prev);
   };
 
   const nextLevel = () => {
     setIsCleared(false);
     setStats(null);
     setMoveCount(0);
-    setLevelIdx(prev => (prev + 1) % 2);
+    // Pick a random level that is different from the current one
+    setLevelIdx(prev => {
+      let next = Math.floor(Math.random() * 4);
+      while (next === prev % 4) {
+        next = Math.floor(Math.random() * 4);
+      }
+      return next;
+    });
   };
 
   const share = () => {
@@ -50,41 +71,10 @@ export default function App() {
     });
   };
 
-  return (
-    <div className="relative w-full h-screen overflow-hidden bg-[#E8D5C4] flex items-center justify-center font-sans">
-      {/* SVG Fluid Background */}
-      <div className="absolute inset-0 z-0 pointer-events-none opacity-40">
-        <svg viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
-          <motion.path
-            animate={{
-              d: [
-                "M918,655Q836,810,673,836Q510,862,355,818Q200,774,150,637Q100,500,150,363Q200,226,355,182Q510,138,673,182Q836,226,877,363Q918,500,918,655Z",
-                "M880,630Q840,760,710,840Q580,920,440,860Q300,800,220,650Q140,500,220,350Q300,200,440,140Q580,80,710,160Q840,240,860,435Q880,630,880,630Z",
-                "M918,655Q836,810,673,836Q510,862,355,818Q200,774,150,637Q100,500,150,363Q200,226,355,182Q510,138,673,182Q836,226,877,363Q918,500,918,655Z"
-              ]
-            }}
-            transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
-            fill="#B8D4E3"
-          />
-          <motion.circle
-            animate={{ cx: [200, 800, 200], cy: [200, 800, 200] }}
-            transition={{ duration: 30, repeat: Infinity, ease: "easeInOut" }}
-            r="150"
-            fill="#D4C4B0"
-            className="opacity-30"
-          />
-        </svg>
-      </div>
-
-      {/* Decorative Isometric Elements */}
-      <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-20 left-20 w-32 h-32 bg-white/10 skew-y-[-15deg] rotate-[15deg] rounded-lg border border-white/20 blur-sm" />
-        <div className="absolute bottom-20 right-20 w-48 h-48 bg-[#E8A87C]/10 skew-y-[15deg] rotate-[-15deg] rounded-lg border border-[#E8A87C]/20 blur-sm" />
-      </div>
-
-      {/* Game Container */}
+  const pages = [
+    { id: 'landing', component: <LandingPage /> },
+    { id: 'game', component: (
       <div className="relative z-10 w-full max-w-lg flex flex-col items-center">
-        {/* Header */}
         <motion.div 
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -103,7 +93,6 @@ export default function App() {
           </div>
         </motion.div>
 
-        {/* Canvas */}
         <div className="relative bg-white/20 backdrop-blur-md rounded-3xl p-4 shadow-2xl border border-white/30">
           <GameCanvas 
             levelIdx={levelIdx} 
@@ -113,7 +102,6 @@ export default function App() {
           />
         </div>
 
-        {/* Footer / Controls */}
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -127,15 +115,69 @@ export default function App() {
           </button>
         </motion.div>
       </div>
+    )},
+    { id: 'telemetry', component: <div className="w-full max-w-4xl h-[80vh]"><TelemetryDashboard data={stats ? { ...stats.telemetry, time: stats.time, moves: stats.moves } : null} /></div> },
+    { id: 'growth', component: <div className="w-full max-w-lg h-[60vh]"><PlantGrowth /></div> },
+  ];
 
-      {/* Result Screen */}
+  const goToPage = (idx: number) => {
+    if (idx >= 0 && idx < pages.length) setCurrentPage(idx);
+  };
+
+  return (
+    <div className="relative w-full h-screen overflow-hidden bg-[#E8D5C4] flex items-center justify-center font-sans">
+      {/* SVG Fluid Background (Static for all pages) */}
+      <div className="absolute inset-0 z-0 pointer-events-none opacity-40">
+        <svg viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+          <motion.path
+            animate={{
+              d: [
+                "M918,655Q836,810,673,836Q510,862,355,818Q200,774,150,637Q100,500,150,363Q200,226,355,182Q510,138,673,182Q836,226,877,363Q918,500,918,655Z",
+                "M880,630Q840,760,710,840Q580,920,440,860Q300,800,220,650Q140,500,220,350Q300,200,440,140Q580,80,710,160Q840,240,860,435Q880,630,880,630Z",
+                "M918,655Q836,810,673,836Q510,862,355,818Q200,774,150,637Q100,500,150,363Q200,226,355,182Q510,138,673,182Q836,226,877,363Q918,500,918,655Z"
+              ]
+            }}
+            transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
+            fill="#B8D4E3"
+          />
+        </svg>
+      </div>
+
+      {/* Vertical Navigation Dots */}
+      <div className="absolute right-8 top-1/2 -translate-y-1/2 z-50 flex flex-col gap-4">
+        {pages.map((_, i) => (
+          <button
+            key={i}
+            onClick={() => goToPage(i)}
+            className={`w-3 h-3 rounded-full transition-all duration-500 ${
+              currentPage === i ? 'bg-[#37312F] scale-125' : 'bg-[#37312F]/20 hover:bg-[#37312F]/40'
+            }`}
+          />
+        ))}
+      </div>
+
+      {/* Page Content */}
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={currentPage}
+          initial={{ opacity: 0, y: 50 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -50 }}
+          transition={{ duration: 0.6, ease: "easeInOut" }}
+          className="w-full h-full flex items-center justify-center p-8"
+        >
+          {pages[currentPage].component}
+        </motion.div>
+      </AnimatePresence>
+
+      {/* Result Screen Overlay (Only for game page) */}
       <AnimatePresence>
-        {isCleared && stats && (
+        {currentPage === 1 && isCleared && stats && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-[#E8D5C4]/95 backdrop-blur-xl flex flex-col items-center justify-center p-8"
+            className="fixed inset-0 z-[60] bg-[#E8D5C4]/95 backdrop-blur-xl flex flex-col items-center justify-center p-8"
           >
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
@@ -153,7 +195,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Minimap */}
               <div className="grid grid-cols-3 gap-2 mb-12">
                 {Array.from({ length: 9 }).map((_, i) => {
                   const r = Math.floor(i / 3);
@@ -191,9 +232,15 @@ export default function App() {
                   <ChevronRight size={28} className="text-[#37312F]" />
                 </button>
               </div>
+              
+              <button 
+                onClick={() => goToPage(2)}
+                className="mt-12 flex items-center gap-2 text-[#37312F]/40 hover:text-[#37312F] transition-colors text-sm uppercase tracking-widest"
+              >
+                View Analysis <ChevronDown size={16} />
+              </button>
             </motion.div>
 
-            {/* Toast */}
             <AnimatePresence>
               {showToast && (
                 <motion.div
@@ -202,7 +249,7 @@ export default function App() {
                   exit={{ opacity: 0, y: 20 }}
                   className="absolute bottom-12 px-6 py-2 bg-black/70 text-white rounded-full text-sm"
                 >
-                  📋
+                  📋 Copied to clipboard
                 </motion.div>
               )}
             </AnimatePresence>

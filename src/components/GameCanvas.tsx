@@ -3,7 +3,17 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 interface GameCanvasProps {
   levelIdx: number;
   onMove: (count: number) => void;
-  onClear: (stats: { time: number; moves: number; visited: Set<string> }) => void;
+  onClear: (stats: { 
+    time: number; 
+    moves: number; 
+    visited: Set<string>;
+    telemetry: {
+      firstTouchDelay: number;
+      backtracks: number;
+      pathEfficiency: number;
+      hintUsed: boolean;
+    }
+  }) => void;
   onRestart: () => void;
 }
 
@@ -24,7 +34,7 @@ const COLORS = {
 
 const LEVELS = [
   {
-    type: 'A',
+    type: 'A', // Path
     heights: [
       [1, 1, 2, 2, 2],
       [1, 0, 0, 2, 3],
@@ -41,7 +51,7 @@ const LEVELS = [
     solution: [[0, 0], [1, 0], [2, 0], [2, 1], [2, 2], [2, 3], [3, 3], [3, 4], [4, 4]]
   },
   {
-    type: 'B',
+    type: 'B', // Rotation
     heights: [
       [0, 0, 0, 0, 0],
       [0, 1, 2, 0, 0],
@@ -52,25 +62,58 @@ const LEVELS = [
     rotatable: { r: 1, c: 1, size: 2 },
     optimal: 6,
     solution: [[0, 0], [1, 0], [1, 1], [2, 1], [2, 2], [3, 2], [4, 2], [4, 3], [4, 4]]
+  },
+  {
+    type: 'C', // Sliding
+    heights: [
+      [0, 0, 0, 0, 0],
+      [0, 1, 1, 1, 0],
+      [0, 1, 0, 1, 0],
+      [0, 1, 1, 1, 0],
+      [0, 0, 0, 0, 0]
+    ],
+    slider: { r: 2, c: 2, axis: 'x', pos: 0, range: [0, 1] },
+    optimal: 7,
+    solution: [[0, 0], [1, 0], [2, 0], [2, 1], [2, 2], [2, 3], [3, 3], [4, 3], [4, 4]]
+  },
+  {
+    type: 'D', // Switch
+    heights: [
+      [1, 1, 1, 0, 0],
+      [0, 0, 1, 0, 0],
+      [0, 0, 1, 1, 1],
+      [0, 0, 0, 0, 1],
+      [0, 0, 0, 0, 1]
+    ],
+    switch: { r: 2, c: 2, targets: [{ r: 0, c: 3, h: 1 }, { r: 1, c: 3, h: 1 }] },
+    optimal: 9,
+    solution: [[0, 0], [0, 1], [0, 2], [1, 2], [2, 2], [2, 3], [2, 4], [3, 4], [4, 4]]
   }
 ];
 
 export const GameCanvas: React.FC<GameCanvasProps> = ({ levelIdx, onMove, onClear, onRestart }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef({
-    levelData: JSON.parse(JSON.stringify(LEVELS[levelIdx])),
+    levelData: JSON.parse(JSON.stringify(LEVELS[levelIdx % LEVELS.length])),
     charPos: { r: 0, c: 0 },
     moveCount: 0,
     startTime: Date.now(),
     isMoving: false,
     isRotating: false,
+    isSliding: false,
     isCleared: false,
     visitedTiles: new Set<string>(['0,0']),
     hintActive: 0,
     bridgeAlpha: 0,
     charAnim: { r: 0, c: 0, t: 1 },
     tileFloatAnim: { active: false, t: 0 },
-    particles: [] as any[]
+    particles: [] as any[],
+    telemetry: {
+      firstTouchDelay: 0,
+      backtracks: 0,
+      pathEfficiency: 0,
+      hintUsed: false
+    }
   });
 
   const getScreenPos = (r: number, c: number, h: number, width: number, height: number) => {
@@ -83,7 +126,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelIdx, onMove, onClea
 
   const getMovableTiles = useCallback(() => {
     const s = stateRef.current;
-    if (s.isMoving || s.isRotating || s.isCleared) return [];
+    if (s.isMoving || s.isRotating || s.isSliding || s.isCleared) return [];
     const neighbors = [
       { r: s.charPos.r - 1, c: s.charPos.c },
       { r: s.charPos.r + 1, c: s.charPos.c },
@@ -119,24 +162,33 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelIdx, onMove, onClea
       ctx.fillRect(0, 0, width, height);
     }
 
-    // Draw rotatable area indicator
-    if (s.levelData.type === 'B' && !s.isCleared) {
-      const { r, c, size } = s.levelData.rotatable;
-      ctx.strokeStyle = 'rgba(196, 168, 130, 0.4)';
-      ctx.setLineDash([5, 5]);
-      ctx.lineWidth = 2;
-      const p1 = getScreenPos(r - 0.5, c - 0.5, 0, width, height);
-      const p2 = getScreenPos(r - 0.5, c + size - 0.5, 0, width, height);
-      const p3 = getScreenPos(r + size - 0.5, c + size - 0.5, 0, width, height);
-      const p4 = getScreenPos(r + size - 0.5, c - 0.5, 0, width, height);
-      ctx.beginPath();
-      ctx.moveTo(p1.x, p1.y + 20);
-      ctx.lineTo(p2.x, p2.y + 20);
-      ctx.lineTo(p3.x, p3.y + 20);
-      ctx.lineTo(p4.x, p4.y + 20);
-      ctx.closePath();
-      ctx.stroke();
-      ctx.setLineDash([]);
+    // Draw indicators
+    if (!s.isCleared) {
+      if (s.levelData.type === 'B') {
+        const { r, c, size } = s.levelData.rotatable;
+        ctx.strokeStyle = 'rgba(196, 168, 130, 0.4)';
+        ctx.setLineDash([5, 5]);
+        ctx.lineWidth = 2;
+        const p1 = getScreenPos(r - 0.5, c - 0.5, 0, width, height);
+        const p2 = getScreenPos(r - 0.5, c + size - 0.5, 0, width, height);
+        const p3 = getScreenPos(r + size - 0.5, c + size - 0.5, 0, width, height);
+        const p4 = getScreenPos(r + size - 0.5, c - 0.5, 0, width, height);
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y + 20);
+        ctx.lineTo(p2.x, p2.y + 20);
+        ctx.lineTo(p3.x, p3.y + 20);
+        ctx.lineTo(p4.x, p4.y + 20);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else if (s.levelData.type === 'C') {
+        const { r, c } = s.levelData.slider;
+        ctx.strokeStyle = 'rgba(126, 184, 201, 0.4)';
+        ctx.setLineDash([3, 3]);
+        const p = getScreenPos(r, c, 0, width, height);
+        ctx.strokeRect(p.x - 40, p.y - 10, 80, 40);
+        ctx.setLineDash([]);
+      }
     }
 
     const movable = getMovableTiles();
@@ -180,7 +232,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelIdx, onMove, onClea
         ctx.fill();
 
         // Top face
-        ctx.fillStyle = COLORS.top;
+        ctx.fillStyle = (s.levelData.type === 'D' && s.levelData.switch.r === r && s.levelData.switch.c === c) ? COLORS.accent : COLORS.top;
         ctx.beginPath();
         ctx.moveTo(x, y - TILE_H / 2);
         ctx.lineTo(x + TILE_W / 2, y);
@@ -216,7 +268,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelIdx, onMove, onClea
     // Character
     const charR = s.charAnim.t < 1 ? s.charAnim.r : s.charPos.r;
     const charC = s.charAnim.t < 1 ? s.charAnim.c : s.charPos.c;
-    const charH = s.levelData.heights[s.charPos.r][s.charPos.c];
+    const charH = s.levelData.heights[Math.round(charR)][Math.round(charC)];
     const charScreen = getScreenPos(charR, charC, charH, width, height);
     const jumpY = s.charAnim.t < 1 ? Math.sin(s.charAnim.t * Math.PI) * -10 : 0;
 
@@ -255,12 +307,13 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelIdx, onMove, onClea
     canvas.height = 500;
     
     const s = stateRef.current;
-    s.levelData = JSON.parse(JSON.stringify(LEVELS[levelIdx]));
+    s.levelData = JSON.parse(JSON.stringify(LEVELS[levelIdx % LEVELS.length]));
     s.charPos = { r: 0, c: 0 };
     s.moveCount = 0;
     s.startTime = Date.now();
     s.isMoving = false;
     s.isRotating = false;
+    s.isSliding = false;
     s.isCleared = false;
     s.visitedTiles = new Set(['0,0']);
     s.hintActive = 0;
@@ -268,12 +321,13 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelIdx, onMove, onClea
     s.charAnim = { r: 0, c: 0, t: 1 };
     s.tileFloatAnim = { active: false, t: 0 };
     s.particles = [];
+    s.telemetry = { firstTouchDelay: 0, backtracks: 0, pathEfficiency: 0, hintUsed: false };
 
     const hintInterval = setInterval(() => {
       if (s.isCleared) return;
       const elapsed = (Date.now() - s.startTime) / 1000;
-      if (elapsed > 90) s.hintActive = 2;
-      else if (elapsed > 60) s.hintActive = 1;
+      if (elapsed > 90) { s.hintActive = 2; s.telemetry.hintUsed = true; }
+      else if (elapsed > 60) { s.hintActive = 1; s.telemetry.hintUsed = true; }
     }, 1000);
 
     const animId = requestAnimationFrame(draw);
@@ -286,6 +340,10 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelIdx, onMove, onClea
   const handleInput = (e: React.MouseEvent | React.TouchEvent) => {
     const s = stateRef.current;
     if (s.isCleared) return;
+
+    if (s.telemetry.firstTouchDelay === 0) {
+      s.telemetry.firstTouchDelay = Date.now() - s.startTime;
+    }
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -312,14 +370,16 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelIdx, onMove, onClea
       }
     }
 
-    // Rotation click
+    // Interaction click
     if (s.levelData.type === 'B') {
       const { r, c } = s.levelData.rotatable;
       const center = getScreenPos(r + 0.5, c + 0.5, 0, canvas.width, canvas.height);
       const dist = Math.sqrt((x - center.x) ** 2 + (y - (center.y + 20)) ** 2);
-      if (dist < 60) {
-        rotateBlock();
-      }
+      if (dist < 60) rotateBlock();
+    } else if (s.levelData.type === 'C') {
+      const { r, c } = s.levelData.slider;
+      const p = getScreenPos(r, c, 0, canvas.width, canvas.height);
+      if (Math.abs(x - p.x) < 40 && Math.abs(y - (p.y + 10)) < 20) slideBlock();
     }
   };
 
@@ -344,6 +404,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelIdx, onMove, onClea
         s.isMoving = false;
         s.moveCount++;
         onMove(s.moveCount);
+        if (s.visitedTiles.has(`${r},${c}`)) s.telemetry.backtracks++;
         s.visitedTiles.add(`${r},${c}`);
 
         if (s.levelData.type === 'A' && r === s.levelData.bridgeTrigger.r && c === s.levelData.bridgeTrigger.c) {
@@ -355,11 +416,13 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelIdx, onMove, onClea
             if (p < 1) requestAnimationFrame(fade);
           };
           fade();
+        } else if (s.levelData.type === 'D' && r === s.levelData.switch.r && c === s.levelData.switch.c) {
+          s.levelData.switch.targets.forEach((t: any) => {
+            s.levelData.heights[t.r][t.c] = s.levelData.heights[t.r][t.c] === 0 ? t.h : 0;
+          });
         }
 
-        if (r === 4 && c === 4) {
-          clearGame();
-        }
+        if (r === 4 && c === 4) clearGame();
       }
     };
     animate();
@@ -386,17 +449,34 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelIdx, onMove, onClea
       else if (dr === 1 && dc === 0) s.charPos.r--;
     }
 
-    setTimeout(() => {
-      s.isRotating = false;
-      s.moveCount++;
-      onMove(s.moveCount);
-    }, 300);
+    setTimeout(() => { s.isRotating = false; s.moveCount++; onMove(s.moveCount); }, 300);
+  };
+
+  const slideBlock = () => {
+    const s = stateRef.current;
+    if (s.isSliding || s.isMoving || s.isCleared) return;
+    s.isSliding = true;
+    const { r, c, pos, range } = s.levelData.slider;
+    const nextPos = pos === range[0] ? range[1] : range[0];
+    
+    // Update heights
+    s.levelData.heights[r][c + pos] = 0;
+    s.levelData.heights[r][c + nextPos] = 1;
+    s.levelData.slider.pos = nextPos;
+
+    if (s.charPos.r === r && s.charPos.c === c + pos) {
+      s.charPos.c = c + nextPos;
+    }
+
+    setTimeout(() => { s.isSliding = false; s.moveCount++; onMove(s.moveCount); }, 300);
   };
 
   const clearGame = () => {
     const s = stateRef.current;
     s.isCleared = true;
     const totalTime = Math.floor((Date.now() - s.startTime) / 1000);
+    s.telemetry.pathEfficiency = s.levelData.optimal / s.moveCount;
+    
     s.tileFloatAnim.active = true;
     const start = Date.now();
     const anim = () => {
@@ -417,7 +497,12 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelIdx, onMove, onClea
     }
 
     setTimeout(() => {
-      onClear({ time: totalTime, moves: s.moveCount, visited: s.visitedTiles });
+      onClear({ 
+        time: totalTime, 
+        moves: s.moveCount, 
+        visited: s.visitedTiles,
+        telemetry: s.telemetry 
+      });
     }, 1500);
   };
 
@@ -425,10 +510,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelIdx, onMove, onClea
     <canvas
       ref={canvasRef}
       onMouseDown={handleInput}
-      onTouchStart={(e) => {
-        e.preventDefault();
-        handleInput(e);
-      }}
+      onTouchStart={(e) => { e.preventDefault(); handleInput(e); }}
       className="max-w-full h-auto cursor-pointer"
     />
   );
